@@ -5,6 +5,7 @@ timeout: 900
 commands:
   - script: |
       #!/bin/bash
+      set -eo pipefail
 
       current_shell() {
         currentShell=$(readlink /proc/"${$}"/exe)
@@ -16,8 +17,6 @@ commands:
 
       # show all available shells
       cat /etc/shells
-
-      set -eo pipefail
 
       # imports
       source './utils.sh'
