@@ -41,17 +41,17 @@ const (
 	finalizer = "openshift.ifps.cluster"
 )
 
-// IpfsReconciler reconciles a Ipfs object.
-type IpfsReconciler struct {
+// IpfsClusterReconciler reconciles a Ipfs object.
+type IpfsClusterReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
 //+kubebuilder:rbac:groups=*,resources=*,verbs=get;list
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=cluster.ipfs.io,resources=ipfs,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=cluster.ipfs.io,resources=ipfs/finalizers,verbs=update
-//+kubebuilder:rbac:groups=cluster.ipfs.io,resources=ipfs/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=cluster.ipfs.io,resources=ipfsclusters,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=cluster.ipfs.io,resources=ipfsclusters/finalizers,verbs=update
+//+kubebuilder:rbac:groups=cluster.ipfs.io,resources=ipfsclusters/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
@@ -59,7 +59,7 @@ type IpfsReconciler struct {
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 
-func (r *IpfsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *IpfsClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	// Fetch the Ipfs instance
 	instance, err := r.ensureIPFSCluster(ctx, req)
@@ -113,7 +113,7 @@ func (r *IpfsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		if relay.Status.AddrInfo.ID == "" {
 			log.Info("relay is not ready yet. Will continue waiting.", "relay", relayName)
-			return ctrl.Result{RequeueAfter: time.Minute}, nil
+			return ctrl.Result{RequeueAfter: time.Second * 15}, nil
 		}
 	}
 	if err = r.Status().Update(ctx, instance); err != nil {
@@ -127,9 +127,9 @@ func (r *IpfsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 }
 
 // createTrackedObjects Creates a mapping from client objects to their mutating functions.
-func (r *IpfsReconciler) createTrackedObjects(
+func (r *IpfsClusterReconciler) createTrackedObjects(
 	ctx context.Context,
-	instance *clusterv1alpha1.Ipfs,
+	instance *clusterv1alpha1.IpfsCluster,
 	peerID peer.ID,
 	clusterSecret string,
 	privateString string,
@@ -137,22 +137,27 @@ func (r *IpfsReconciler) createTrackedObjects(
 	sa := corev1.ServiceAccount{}
 	svc := corev1.Service{}
 	cmScripts := corev1.ConfigMap{}
-	cmConfig := corev1.ConfigMap{}
 	secConfig := corev1.Secret{}
 	sts := appsv1.StatefulSet{}
 
 	mutsa := r.serviceAccount(instance, &sa)
 	mutsvc, svcName := r.serviceCluster(instance, &svc)
-	mutCmScripts, cmScriptName := r.configMapScripts(ctx, instance, &cmScripts)
-	mutCmConfig, cmConfigName := r.configMapConfig(instance, &cmConfig, peerID.String())
-	mutSecConfig, secConfigName := r.secretConfig(instance, &secConfig, []byte(clusterSecret), []byte(privateString))
-	mutSts := r.statefulSet(instance, &sts, svcName, secConfigName, cmConfigName, cmScriptName)
+
+	mutCmScripts, cmScriptName := r.ConfigMapScripts(ctx, instance, &cmScripts)
+	mutSecConfig, secConfigName := r.SecretConfig(
+		ctx,
+		instance,
+		&secConfig,
+		[]byte(clusterSecret),
+		[]byte(privateString),
+		peerID.String(),
+	)
+	mutSts := r.statefulSet(instance, &sts, svcName, secConfigName, cmScriptName)
 
 	trackedObjects := map[client.Object]controllerutil.MutateFn{
 		&sa:        mutsa,
 		&svc:       mutsvc,
 		&cmScripts: mutCmScripts,
-		&cmConfig:  mutCmConfig,
 		&secConfig: mutSecConfig,
 		&sts:       mutSts,
 	}
@@ -160,12 +165,12 @@ func (r *IpfsReconciler) createTrackedObjects(
 }
 
 // ensureIPFSCluster Attempts to obtain an IPFS Cluster resource, and error if not found.
-func (r *IpfsReconciler) ensureIPFSCluster(
+func (r *IpfsClusterReconciler) ensureIPFSCluster(
 	ctx context.Context,
 	req ctrl.Request,
-) (*clusterv1alpha1.Ipfs, error) {
+) (*clusterv1alpha1.IpfsCluster, error) {
 	var err error
-	instance := &clusterv1alpha1.Ipfs{}
+	instance := &clusterv1alpha1.IpfsCluster{}
 	if err = r.Get(ctx, req.NamespacedName, instance); err == nil {
 		return instance, nil
 	}
@@ -182,9 +187,9 @@ func (r *IpfsReconciler) ensureIPFSCluster(
 // createCircuitRelays Creates the necessary amount of circuit relays if any are missing.
 // FIXME: if we change the number of CircuitRelays, we should update
 // the IPFS config file as well.
-func (r *IpfsReconciler) createCircuitRelays(
+func (r *IpfsClusterReconciler) createCircuitRelays(
 	ctx context.Context,
-	instance *clusterv1alpha1.Ipfs,
+	instance *clusterv1alpha1.IpfsCluster,
 ) error {
 	// do nothing
 	if len(instance.Status.CircuitRelays) >= int(instance.Spec.Networking.CircuitRelays) {
@@ -215,15 +220,15 @@ func (r *IpfsReconciler) createCircuitRelays(
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *IpfsReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *IpfsClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&clusterv1alpha1.Ipfs{}).
+		For(&clusterv1alpha1.IpfsCluster{}).
 		Owns(&appsv1.StatefulSet{}, builder.OnlyMetadata).
 		Owns(&corev1.Service{}, builder.OnlyMetadata).
 		Owns(&corev1.ServiceAccount{}, builder.OnlyMetadata).
 		Owns(&corev1.Secret{}, builder.OnlyMetadata).
 		Owns(&corev1.ConfigMap{}, builder.OnlyMetadata).
-		Owns(&clusterv1alpha1.Ipfs{}, builder.OnlyMetadata).
+		Owns(&clusterv1alpha1.IpfsCluster{}, builder.OnlyMetadata).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 1,
 		}).Complete(r)

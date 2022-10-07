@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/libp2p/go-libp2p-core/crypto"
 	ci "github.com/libp2p/go-libp2p-core/crypto"
 	peer "github.com/libp2p/go-libp2p-core/peer"
 )
@@ -21,6 +20,7 @@ func newClusterSecret() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+// newKey Generates a new private key and returns that along with the identity.
 func newKey() (ci.PrivKey, peer.ID, error) {
 	const edDSAKeyLen = 4096
 	priv, pub, err := ci.GenerateKeyPair(ci.Ed25519, edDSAKeyLen)
@@ -41,7 +41,7 @@ func generateIdentity() (peer.ID, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("cannot generate new key: %w", err)
 	}
-	privBytes, err := crypto.MarshalPrivateKey(priv)
+	privBytes, err := ci.MarshalPrivateKey(priv)
 	if err != nil {
 		return "", "", fmt.Errorf("cannot get bytes from private key: %w", err)
 	}
